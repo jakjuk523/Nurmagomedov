@@ -16,7 +16,7 @@ BAN_FILE = os.path.join(BASE_DIR, "banned_users.json")
 MSG_FILE = os.path.join(BASE_DIR, "messages.json")
 COOKIE_FILE = os.path.join(BASE_DIR, "cookies.txt")
 
-SECRET_CODE = "21022102isa27032012isa21022102"
+SECRET_CODE = "27032012"
 ADMIN_PASSWORD = "2dsfjqHFugfHUgh219-Hfhwgj@"
 SENDER_EMAIL = "isa.murad.ibaanah@gmail.com"
 SENDER_PASSWORD = st.secrets.get('google_password', "")
@@ -47,7 +47,7 @@ def save_data(file, data):
 
 def send_otp(email):
     otp = str(random.randint(100000, 999999))
-    msg = MIMEText(f"Ваш код доступа: {otp}")
+    msg = MIMEText(f"Ваш код доступа для смены данных: {otp}")
     msg['Subject'], msg['From'], msg['To'] = 'Код подтверждения', SENDER_EMAIL, email
     try:
         server = smtplib.SMTP("://gmail.com", 587, timeout=10)
@@ -118,7 +118,24 @@ elif st.session_state.auth_step == 'app':
 
     with st.sidebar:
         st.header(f"👤 {st.session_state.user_info['name']}")
+        
+        # --- СМЕНА ПАРОЛЯ ---
+        with st.expander("🔑 Сменить пароль"):
+            new_p = st.text_input("Новый пароль:", type="password")
+            if st.button("Обновить пароль"):
+                if len(new_p) >= 4 and not is_admin:
+                    u_db = load_data(DB_FILE)
+                    if current_user_email in u_db:
+                        u_db[current_user_email]['pass'] = new_p
+                        save_data(DB_FILE, u_db)
+                        st.success("Пароль изменен!")
+                elif is_admin:
+                    st.warning("Пароль админа меняется в коде.")
+                else:
+                    st.error("Минимум 4 символа")
+
         if st.button("🚪 Выйти"): st.session_state.clear(); st.rerun()
+        
         if is_admin:
             st.divider()
             st.subheader("Управление")
@@ -179,7 +196,7 @@ elif st.session_state.auth_step == 'app':
                         with YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(url, download=True)
                             path = ydl.prepare_filename(info)
-                            if f_info['type'] == 'a': path = os.path.splitext(path)[0] + ".mp3"
+                            if f_info['type'] == 'a': path = os.path.splitext(path) + ".mp3"
 
                         if os.path.exists(path):
                             with open(path, "rb") as f:
@@ -191,7 +208,6 @@ elif st.session_state.auth_step == 'app':
         st.subheader("📢 Лента")
         messages = load_data(MSG_FILE)
         
-        # Только админ может создавать посты
         if is_admin:
             with st.expander("📝 Создать новый пост"):
                 with st.form("new_post", clear_on_submit=True):
@@ -208,38 +224,47 @@ elif st.session_state.auth_step == 'app':
                             messages.append(new_post)
                             save_data(MSG_FILE, messages); st.rerun()
 
-        # Отображение ленты
+        # Отображение ленты (с защитой от KeyError)
         for i, m in enumerate(reversed(messages)):
             with st.container(border=True):
-                st.markdown(f"**{m['author']}** <small style='color:gray;'>{m['date']}</small>", unsafe_allow_html=True)
-                st.write(m['text'])
+                # Фикс ошибки KeyError из скриншота:
+                author = m.get('author', m.get('author_name', 'Система'))
+                date = m.get('date', '--:--')
                 
-                # Кнопки реакций
-                c1, c2, _ = st.columns([1, 1, 8])
-                if c1.button(f"👍 {len(m['likes'])}", key=f"lk_{m['id']}"):
-                    if current_user_email not in m['likes']:
-                        m['likes'].append(current_user_email)
-                        if current_user_email in m['dislikes']: m['dislikes'].remove(current_user_email)
+                st.markdown(f"**{author}** <small style='color:gray;'>{date}</small>", unsafe_allow_html=True)
+                st.write(m.get('text', ''))
+                
+                c1, c2, _ = st.columns([0.15, 0.15, 0.7])
+                likes = m.get('likes', [])
+                dislikes = m.get('dislikes', [])
+                
+                if c1.button(f"👍 {len(likes)}", key=f"lk_{m.get('id', i)}"):
+                    if current_user_email not in likes:
+                        likes.append(current_user_email)
+                        if current_user_email in dislikes: dislikes.remove(current_user_email)
+                        m['likes'] = likes
                         save_data(MSG_FILE, messages); st.rerun()
                 
-                if c2.button(f"👎 {len(m['dislikes'])}", key=f"dk_{m['id']}"):
-                    if current_user_email not in m['dislikes']:
-                        m['dislikes'].append(current_user_email)
-                        if current_user_email in m['likes']: m['likes'].remove(current_user_email)
+                if c2.button(f"👎 {len(dislikes)}", key=f"dk_{m.get('id', i)}"):
+                    if current_user_email not in dislikes:
+                        dislikes.append(current_user_email)
+                        if current_user_email in likes: likes.remove(current_user_email)
+                        m['dislikes'] = dislikes
                         save_data(MSG_FILE, messages); st.rerun()
 
-                # Комментарии
-                with st.expander(f"💬 Комментарии ({len(m['comments'])})"):
-                    for c in m['comments']:
-                        st.markdown(f"**{c['user']}:** {c['text']} <small style='color:gray;'>{c['time']}</small>", unsafe_allow_html=True)
+                with st.expander(f"💬 Комментарии ({len(m.get('comments', []))})"):
+                    for c in m.get('comments', []):
+                        st.markdown(f"**{c.get('user', 'User')}:** {c.get('text', '')} <small style='color:gray;'>{c.get('time', '')}</small>", unsafe_allow_html=True)
                     
-                    with st.form(key=f"f_comm_{m['id']}", clear_on_submit=True):
+                    with st.form(key=f"f_comm_{m.get('id', i)}", clear_on_submit=True):
                         c_in = st.text_input("Ваш комментарий...")
                         if st.form_submit_button("Отправить"):
                             if c_in:
+                                if 'comments' not in m: m['comments'] = []
                                 m['comments'].append({
                                     "user": st.session_state.user_info['name'],
                                     "text": c_in.replace("<", "&lt;"),
                                     "time": datetime.now().strftime("%H:%M")
                                 })
                                 save_data(MSG_FILE, messages); st.rerun()
+
