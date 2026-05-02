@@ -8,7 +8,7 @@ from yt_dlp import YoutubeDL
 from datetime import datetime
 
 # --- 1. КОНФИГУРАЦИЯ ---
-st.set_page_config(page_title="Video Downloader & Chat", page_icon="📲", layout="wide")
+st.set_page_config(page_title="Video Downloader & Community", page_icon="📲", layout="wide")
 
 BASE_DIR = os.getcwd()
 DB_FILE = os.path.join(BASE_DIR, "users_db.json")
@@ -16,12 +16,12 @@ BAN_FILE = os.path.join(BASE_DIR, "banned_users.json")
 MSG_FILE = os.path.join(BASE_DIR, "messages.json")
 COOKIE_FILE = os.path.join(BASE_DIR, "cookies.txt")
 
-SECRET_CODE = "27032012"
+SECRET_CODE = "21022102isa27032012isa21022102"
 ADMIN_PASSWORD = "2dsfjqHFugfHUgh219-Hfhwgj@"
 SENDER_EMAIL = "isa.murad.ibaanah@gmail.com"
 SENDER_PASSWORD = st.secrets.get('google_password', "")
 
-# Инициализация файлов (Исправлено: BAN_FILE теперь всегда список)
+# Инициализация файлов
 if not os.path.exists(DB_FILE):
     with open(DB_FILE, "w", encoding="utf-8") as f: json.dump({}, f)
 if not os.path.exists(BAN_FILE):
@@ -64,7 +64,7 @@ if 'user_info' not in st.session_state: st.session_state.user_info = None
 if 'formats' not in st.session_state: st.session_state.formats = None
 if 'url_buffer' not in st.session_state: st.session_state.url_buffer = ""
 
-# --- 4. АВТОРИЗАЦИЯ (Экран как был) ---
+# --- 4. АВТОРИЗАЦИЯ ---
 if st.session_state.auth_step == 'main_gate':
     st.title("🔒 Вход")
     t1, t2 = st.tabs(["🔑 Пользователь", "🛠 Админ"])
@@ -88,7 +88,7 @@ elif st.session_state.auth_step == 'login_or_reg':
     pw = st.text_input("Пароль:", type="password") if choice == "Вход" else ""
     if st.button("Далее"):
         if not em: st.error("Введите Email")
-        elif em in banned: st.error("Бан")
+        elif em in banned: st.error("Доступ заблокирован")
         elif choice == "Вход":
             if em in users and users[em].get('pass') == pw:
                 st.session_state.user_info = {"name": users[em]['name'], "email": em, "role": "user"}
@@ -122,17 +122,15 @@ elif st.session_state.auth_step == 'app':
         if is_admin:
             st.divider()
             st.subheader("Управление")
-            u_db = load_data(DB_FILE)
-            b_db = load_data(BAN_FILE)
+            u_db, b_db = load_data(DB_FILE), load_data(BAN_FILE)
             for email in u_db:
-                # Исправлена ошибка бана: работаем со списком
                 status = "✅" if email not in b_db else "🚫"
                 if st.button(f"{status} {email}"):
                     if email in b_db: b_db.remove(email)
                     else: b_db.append(email)
                     save_data(BAN_FILE, b_db); st.rerun()
 
-    t_dl, t_chat = st.tabs(["📥 Загрузка", "💬 Общий чат"])
+    t_dl, t_chat = st.tabs(["📥 Загрузка видео", "📢 Лента и обсуждения"])
     
     with t_dl:
         url = st.text_input("Ссылка:")
@@ -154,17 +152,12 @@ elif st.session_state.auth_step == 'app':
                         
                         with YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(url, download=False)
-                            opts = {}
-                            # Добавляем Аудио формат (MP3) первым
-                            opts["🎵 Аудио (MP3)"] = {'id': 'bestaudio/best', 'type': 'a'}
-                            
+                            opts = {"🎵 Аудио (MP3)": {'id': 'bestaudio/best', 'type': 'a'}}
                             for f in info.get('formats', []):
                                 h = f.get('height')
                                 if h and f.get('vcodec') != 'none':
                                     label = f"{h}p ({f.get('ext')})"
-                                    if label not in opts:
-                                        opts[label] = {'id': f['format_id'], 'type': 'v'}
-                            
+                                    if label not in opts: opts[label] = {'id': f['format_id'], 'type': 'v'}
                             st.session_state.formats = opts; st.rerun()
                     except Exception as e: st.error(f"Ошибка: {e}")
 
@@ -195,38 +188,58 @@ elif st.session_state.auth_step == 'app':
                 except Exception as e: st.error(f"Ошибка: {e}")
 
     with t_chat:
-        st.subheader("💬 Общий чат")
+        st.subheader("📢 Лента")
         messages = load_data(MSG_FILE)
         
-        chat_container = st.container(height=400)
-        with chat_container:
-            for m in messages:
-                is_me = m.get('author_email') == current_user_email
-                align = "right" if is_me else "left"
-                bg = "#DCF8C6" if is_me else "#F0F0F0"
-                # Защита от XSS
-                safe_text = m.get('text', '').replace("<", "&lt;").replace(">", "&gt;")
-                
-                st.markdown(f"""
-                <div style="display: flex; justify-content: {align}; margin-bottom: 10px;">
-                    <div style="background: {bg}; padding: 10px; border-radius: 15px; max-width: 70%; color: black;">
-                        <b style="font-size: 0.8rem; color: #555;">{m.get('author_name', 'User')}</b><br>
-                        {safe_text}<br>
-                        <small style="font-size: 0.6rem; color: gray;">{m.get('date')}</small>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+        # Только админ может создавать посты
+        if is_admin:
+            with st.expander("📝 Создать новый пост"):
+                with st.form("new_post", clear_on_submit=True):
+                    p_text = st.text_area("Текст сообщения:")
+                    if st.form_submit_button("Опубликовать"):
+                        if p_text:
+                            new_post = {
+                                "id": str(random.randint(10000, 99999)),
+                                "author": "Администратор",
+                                "text": p_text,
+                                "date": datetime.now().strftime("%d.%m %H:%M"),
+                                "likes": [], "dislikes": [], "comments": []
+                            }
+                            messages.append(new_post)
+                            save_data(MSG_FILE, messages); st.rerun()
 
-        with st.form("send_msg", clear_on_submit=True):
-            user_text = st.text_input("Введите сообщение...")
-            if st.form_submit_button("Отправить"):
-                if user_text:
-                    new_msg = {
-                        "author_name": st.session_state.user_info['name'],
-                        "author_email": current_user_email,
-                        "text": user_text,
-                        "date": datetime.now().strftime("%H:%M")
-                    }
-                    messages.append(new_msg)
-                    save_data(MSG_FILE, messages[-100:]) # Храним последние 100
-                    st.rerun()
+        # Отображение ленты
+        for i, m in enumerate(reversed(messages)):
+            with st.container(border=True):
+                st.markdown(f"**{m['author']}** <small style='color:gray;'>{m['date']}</small>", unsafe_allow_html=True)
+                st.write(m['text'])
+                
+                # Кнопки реакций
+                c1, c2, _ = st.columns([1, 1, 8])
+                if c1.button(f"👍 {len(m['likes'])}", key=f"lk_{m['id']}"):
+                    if current_user_email not in m['likes']:
+                        m['likes'].append(current_user_email)
+                        if current_user_email in m['dislikes']: m['dislikes'].remove(current_user_email)
+                        save_data(MSG_FILE, messages); st.rerun()
+                
+                if c2.button(f"👎 {len(m['dislikes'])}", key=f"dk_{m['id']}"):
+                    if current_user_email not in m['dislikes']:
+                        m['dislikes'].append(current_user_email)
+                        if current_user_email in m['likes']: m['likes'].remove(current_user_email)
+                        save_data(MSG_FILE, messages); st.rerun()
+
+                # Комментарии
+                with st.expander(f"💬 Комментарии ({len(m['comments'])})"):
+                    for c in m['comments']:
+                        st.markdown(f"**{c['user']}:** {c['text']} <small style='color:gray;'>{c['time']}</small>", unsafe_allow_html=True)
+                    
+                    with st.form(key=f"f_comm_{m['id']}", clear_on_submit=True):
+                        c_in = st.text_input("Ваш комментарий...")
+                        if st.form_submit_button("Отправить"):
+                            if c_in:
+                                m['comments'].append({
+                                    "user": st.session_state.user_info['name'],
+                                    "text": c_in.replace("<", "&lt;"),
+                                    "time": datetime.now().strftime("%H:%M")
+                                })
+                                save_data(MSG_FILE, messages); st.rerun()
