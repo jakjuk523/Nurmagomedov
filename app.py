@@ -216,4 +216,3 @@ elif st.session_state.auth_step == 'app':
                     messages.append(new_msg)
                     save_data(MSG_FILE, messages)
                     st.rerun()
-
