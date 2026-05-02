@@ -38,8 +38,8 @@ def save_data(file, data):
 
 def send_otp(email):
     otp = str(random.randint(100000, 999999))
-    msg = MIMEText(f"Код подтверждения: {otp}")
-    msg['Subject'], msg['From'], msg['To'] = 'Код доступа', SENDER_EMAIL, email
+    msg = MIMEText(f"Ваш код доступа: {otp}")
+    msg['Subject'], msg['From'], msg['To'] = 'Код подтверждения', SENDER_EMAIL, email
     for target in [SMTP_SERVER, SMTP_IP]:
         try:
             server = smtplib.SMTP(target, SMTP_PORT, timeout=10)
@@ -91,7 +91,7 @@ elif st.session_state.auth_step == 'login_or_reg':
                 if em in users and isinstance(users[em], dict) and users[em].get('pass') == pw:
                     st.session_state.user_info = {"name": users[em]['name'], "email": em, "role": "user"}
                     st.session_state.auth_step = 'app'; st.rerun()
-                else: st.error("Ошибка")
+                else: st.error("Ошибка входа")
             else:
                 otp = send_otp(em)
                 if otp:
@@ -105,23 +105,26 @@ elif st.session_state.auth_step in ['verify', 'reset']:
     with st.form("otp_finish"):
         c, n, p1, p2 = st.text_input("Код:"), st.text_input("Имя:") if is_reg else "", st.text_input("Пароль:", type="password"), st.text_input("Повторите:", type="password")
         if st.form_submit_button("Завершить"):
-            if c == st.session_state.get('otp') and p1 == p2:
+            if c == st.session_state.get('otp') and p1 == p2 and len(p1) > 3:
                 users = load_data(DB_FILE)
-                users[st.session_state.temp_email] = {"name": n if is_reg else users[st.session_state.temp_email]['name'], "pass": p1}
+                name_val = n if is_reg else users.get(st.session_state.temp_email, {}).get('name', 'User')
+                users[st.session_state.temp_email] = {"name": name_val, "pass": p1}
                 save_data(DB_FILE, users); st.success("Готово!"); st.session_state.auth_step = 'login_or_reg'; st.rerun()
 
 # --- 5. ПРИЛОЖЕНИЕ ---
 elif st.session_state.auth_step == 'app':
     is_admin = st.session_state.user_info.get('role') == 'admin'
     
-    # МОЩНАЯ МАСКИРОВКА
+    # ПАРАМЕТРЫ ДЛЯ ОБХОДА БЛОКИРОВКИ 403
     ydl_base_opts = {
         'quiet': True,
         'nocheckcertificate': True,
         'no_warnings': True,
         'youtube_include_dash_manifest': False,
+        # Имитируем разные устройства
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         }
     }
@@ -138,7 +141,10 @@ elif st.session_state.auth_step == 'app':
             st.divider()
             u_db, b_db = load_data(DB_FILE), load_data(BAN_FILE)
             for email, data in u_db.items():
-                if st.button(f"🚫 {email}", key=email):
+                name = data.get('name', 'User') if isinstance(data, dict) else "Old"
+                c1, c2 = st.columns(2)
+                c1.write(f"**{name}**\n{email}")
+                if c2.button("🚫" if email not in b_db else "✅", key=email):
                     if email in b_db: b_db.remove(email)
                     else: b_db.append(email)
                     save_data(BAN_FILE, b_db); st.rerun()
@@ -152,7 +158,7 @@ elif st.session_state.auth_step == 'app':
             st.session_state.url_buffer, st.session_state.formats = url, None
 
         if url and not st.session_state.formats:
-            if st.button("🔍 Получить форматы", use_container_width=True):
+            if st.button("🔍 Получить доступные форматы", use_container_width=True):
                 with st.spinner("Пробиваем защиту YouTube..."):
                     try:
                         with YoutubeDL(ydl_base_opts) as ydl:
@@ -171,10 +177,10 @@ elif st.session_state.auth_step == 'app':
 
         if st.session_state.formats:
             choice = st.selectbox("Качество:", list(st.session_state.formats.keys()))
-            if st.button("🚀 СКАЧАТЬ ВИДЕО", type="primary", use_container_width=True):
+            if st.button("🚀 СКАЧАТЬ ФАЙЛ", type="primary", use_container_width=True):
                 try:
                     f_info = st.session_state.formats[choice]
-                    with st.spinner("Загрузка..."):
+                    with st.spinner("Загрузка и обработка..."):
                         ydl_opts = ydl_base_opts.copy()
                         ydl_opts['format'] = f"{f_info['id']}+bestaudio/best" if f_info['type'] == 'v' else 'bestaudio/best'
                         ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/%(title)s.%(ext)s'
@@ -184,13 +190,14 @@ elif st.session_state.auth_step == 'app':
                         with YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(url, download=True)
                             path = ydl.prepare_filename(info)
-                            # ИСПРАВЛЕНИЕ ОШИБКИ TUPLE:
-                            if f_info['type'] == 'a' and not path.endswith('.mp3'):
-                                base_path = os.path.splitext(path)[0]
-                                path = base_path + ".mp3"
+                            
+                            # ИСПРАВЛЕНИЕ ОШИБКИ С TUPLE ПРИ ПЕРЕИМЕНОВАНИИ
+                            if f_info['type'] == 'a': 
+                                base, ext = os.path.splitext(path)
+                                path = base + ".mp3"
                             
                             with open(path, "rb") as f:
-                                st.success("✅ Готово!")
+                                st.success("✅ Готово к сохранению!")
                                 st.download_button("💾 СОХРАНИТЬ НА УСТРОЙСТВО", f, file_name=os.path.basename(path), use_container_width=True)
                             os.remove(path)
                 except Exception as e: st.error(f"Ошибка загрузки: {e}")
