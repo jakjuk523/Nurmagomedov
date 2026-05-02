@@ -8,8 +8,7 @@ from yt_dlp import YoutubeDL
 from datetime import datetime
 
 # --- 1. КОНФИГУРАЦИЯ ---
-SMTP_SERVER = "://gmail.com"
-SMTP_IP = "74.125.131.108" # Резервный IP для стабильности
+SMTP_SERVER, SMTP_IP = "://gmail.com", "74.125.131.108"
 SMTP_PORT = 587
 SENDER_EMAIL = "isa.murad.ibaanah@gmail.com"
 SENDER_PASSWORD = st.secrets.get('google_password', "")
@@ -39,11 +38,11 @@ def save_data(file, data):
 
 def send_otp(email):
     otp = str(random.randint(100000, 999999))
-    msg = MIMEText(f"Ваш код подтверждения: {otp}")
+    msg = MIMEText(f"Код подтверждения: {otp}")
     msg['Subject'], msg['From'], msg['To'] = 'Код подтверждения', SENDER_EMAIL, email
     for target in [SMTP_SERVER, SMTP_IP]:
         try:
-            server = smtplib.SMTP(target, SMTP_PORT, timeout=15)
+            server = smtplib.SMTP(target, SMTP_PORT, timeout=10)
             server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.sendmail(SENDER_EMAIL, email, msg.as_string())
@@ -52,7 +51,7 @@ def send_otp(email):
         except: continue
     return None
 
-# --- 3. СЕССИЯ ---
+# --- 3. СОСТОЯНИЕ СЕССИИ ---
 if 'auth_step' not in st.session_state: st.session_state.auth_step = 'main_gate'
 if 'user_info' not in st.session_state: st.session_state.user_info = None
 if 'formats' not in st.session_state: st.session_state.formats = None
@@ -69,7 +68,7 @@ if st.session_state.auth_step == 'main_gate':
             c = st.text_input("Код доступа:", type="password")
             if st.form_submit_button("Войти"):
                 if c == SECRET_CODE: st.session_state.auth_step = 'login_or_reg'; st.rerun()
-                else: st.error("Неверно")
+                else: st.error("Неверный код")
     with t2:
         with st.form("admin_gate"):
             ap = st.text_input("Пароль организатора:", type="password")
@@ -106,7 +105,7 @@ elif st.session_state.auth_step in ['verify', 'reset']:
     with st.form("otp_finish"):
         c = st.text_input("Код из письма:")
         n = st.text_input("Имя:") if is_reg else ""
-        p1 = st.text_input("Новый пароль:", type="password")
+        p1 = st.text_input("Пароль:", type="password")
         p2 = st.text_input("Повторите:", type="password")
         if st.form_submit_button("Завершить"):
             if c == st.session_state.get('otp') and p1 == p2 and len(p1) > 3:
@@ -122,23 +121,19 @@ elif st.session_state.auth_step == 'app':
     is_admin = st.session_state.user_info.get('role') == 'admin'
     with st.sidebar:
         st.write(f"👤 **{st.session_state.user_info['name']}**")
-        
-        # Кнопка смены пароля для юзеров
         if not is_admin:
             if st.button("⚙️ Сменить пароль"):
                 otp = send_otp(st.session_state.user_info['email'])
                 if otp:
                     st.session_state.temp_email, st.session_state.otp = st.session_state.user_info['email'], otp
                     st.session_state.auth_step = 'reset'; st.rerun()
-        
         if st.button("🚪 Выйти"): st.session_state.clear(); st.rerun()
-        
         if is_admin:
             st.divider()
             u_db, b_db = load_data(DB_FILE), load_data(BAN_FILE)
             for email, data in u_db.items():
                 name = data.get('name', 'User') if isinstance(data, dict) else "Old"
-                c1, c2 = st.columns()
+                c1, c2 = st.columns(2) # Исправлено: добавлено (2)
                 c1.write(f"**{name}**\n{email}")
                 if c2.button("🚫" if email not in b_db else "✅", key=email):
                     if email in b_db: b_db.remove(email)
@@ -152,7 +147,6 @@ elif st.session_state.auth_step == 'app':
         url = st.text_input("Ссылка:")
         if url != st.session_state.url_buffer:
             st.session_state.url_buffer, st.session_state.formats = url, None
-
         if url and not st.session_state.formats:
             if st.button("🔍 Анализ"):
                 with st.spinner("Анализирую..."):
@@ -175,14 +169,8 @@ elif st.session_state.auth_step == 'app':
                 try:
                     f_info = st.session_state.formats[choice]
                     with st.spinner("Загрузка..."):
-                        ydl_opts = {
-                            'format': f_info['id']+'+bestaudio/best' if f_info['type']=='v' else 'bestaudio/best',
-                            'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s',
-                            'nocheckcertificate': True
-                        }
-                        if f_info['type']=='a':
-                            ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
-                        
+                        ydl_opts = {'format': f_info['id']+'+bestaudio/best' if f_info['type']=='v' else 'bestaudio/best', 'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s', 'nocheckcertificate': True}
+                        if f_info['type']=='a': ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
                         with YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(url, download=True)
                             path = ydl.prepare_filename(info)
@@ -194,49 +182,34 @@ elif st.session_state.auth_step == 'app':
             if st.button("🔄 Сброс"): st.session_state.formats = None; st.rerun()
 
     with t_chat:
-        st.header("💬 Сообщения и Обсуждения")
+        st.header("💬 Обсуждения")
         msgs = load_data(MSG_FILE)
-        
         if is_admin:
-            with st.expander("📝 Написать сообщение"):
+            with st.expander("📝 Новое сообщение"):
                 txt = st.text_area("Текст:")
                 if st.button("Отправить"):
-                    msgs.append({
-                        "text": txt, 
-                        "date": datetime.now().strftime("%d.%m %H:%M"), 
-                        "likes": 0, "dislikes": 0, "voted": [],
-                        "comments": []
-                    })
+                    msgs.append({"text": txt, "date": datetime.now().strftime("%d.%m %H:%M"), "likes": 0, "dislikes": 0, "voted": [], "comments": []})
                     save_data(MSG_FILE, msgs); st.rerun()
         
         for i, m in enumerate(reversed(msgs)):
             idx = len(msgs) - 1 - i
             st.markdown(f"<div style='background:#f0f2f6;padding:15px;border-radius:10px;border-left:5px solid red;'><b>{m['text']}</b><br><small>{m['date']}</small></div>", unsafe_allow_html=True)
             
-            c1, c2, c3 = st.columns([1, 1, 2])
+            c1, c2, c3 = st.columns([1,1,2]) # Исправлено: добавлены пропорции
             uid = st.session_state.user_info.get('email', 'admin')
-            
             if c1.button(f"👍 {m['likes']}", key=f"l{idx}"):
-                if uid not in m['voted']:
-                    msgs[idx]['likes'] += 1; msgs[idx]['voted'].append(uid); save_data(MSG_FILE, msgs); st.rerun()
-            
+                if uid not in m.get('voted', []):
+                    msgs[idx]['likes'] += 1; msgs[idx].setdefault('voted', []).append(uid); save_data(MSG_FILE, msgs); st.rerun()
             if c2.button(f"👎 {m['dislikes']}", key=f"d{idx}"):
-                if uid not in m['voted']:
-                    msgs[idx]['dislikes'] += 1; msgs[idx]['voted'].append(uid); save_data(MSG_FILE, msgs); st.rerun()
+                if uid not in m.get('voted', []):
+                    msgs[idx]['dislikes'] += 1; msgs[idx].setdefault('voted', []).append(uid); save_data(MSG_FILE, msgs); st.rerun()
             
-            # --- СИСТЕМА КОММЕНТАРИЕВ ---
-            with c3.expander(f"💬 Комменты ({len(m.get('comments', []))})"):
+            with c3.expander(f"💬 Ответы ({len(m.get('comments', []))})"):
                 for comm in m.get('comments', []):
                     st.markdown(f"**{comm['user']}**: {comm['text']} <small style='color:gray'>{comm['time']}</small>", unsafe_allow_html=True)
-                
-                new_comm = st.text_input("Напишите ответ...", key=f"in{idx}")
-                if st.button("Ответить", key=f"btn_c{idx}"):
-                    if new_comm:
-                        if "comments" not in msgs[idx]: msgs[idx]["comments"] = []
-                        msgs[idx]["comments"].append({
-                            "user": st.session_state.user_info['name'],
-                            "text": new_comm,
-                            "time": datetime.now().strftime("%H:%M")
-                        })
+                nc = st.text_input("Ваш ответ...", key=f"in{idx}")
+                if st.button("Ок", key=f"btn_c{idx}"):
+                    if nc:
+                        msgs[idx].setdefault("comments", []).append({"user": st.session_state.user_info['name'], "text": nc, "time": datetime.now().strftime("%H:%M")})
                         save_data(MSG_FILE, msgs); st.rerun()
             st.divider()
