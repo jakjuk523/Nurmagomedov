@@ -133,7 +133,7 @@ elif st.session_state.auth_step == 'app':
             u_db, b_db = load_data(DB_FILE), load_data(BAN_FILE)
             for email, data in u_db.items():
                 name = data.get('name', 'User') if isinstance(data, dict) else "Old"
-                c1, c2 = st.columns(2) # Исправлено: добавлено (2)
+                c1, c2 = st.columns(2)
                 c1.write(f"**{name}**\n{email}")
                 if c2.button("🚫" if email not in b_db else "✅", key=email):
                     if email in b_db: b_db.remove(email)
@@ -147,11 +147,25 @@ elif st.session_state.auth_step == 'app':
         url = st.text_input("Ссылка:")
         if url != st.session_state.url_buffer:
             st.session_state.url_buffer, st.session_state.formats = url, None
+        
+        # Заголовки для обхода 403 ошибки
+        CUSTOM_HEADERS = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://google.com'
+        }
+
         if url and not st.session_state.formats:
             if st.button("🔍 Анализ"):
                 with st.spinner("Анализирую..."):
                     try:
-                        with YoutubeDL({'quiet':True, 'nocheckcertificate': True}) as ydl:
+                        ydl_params = {
+                            'quiet': True,
+                            'nocheckcertificate': True,
+                            'http_headers': CUSTOM_HEADERS
+                        }
+                        with YoutubeDL(ydl_params) as ydl:
                             info = ydl.extract_info(url, download=False)
                             opts = {}
                             for f in info.get('formats', []):
@@ -169,8 +183,15 @@ elif st.session_state.auth_step == 'app':
                 try:
                     f_info = st.session_state.formats[choice]
                     with st.spinner("Загрузка..."):
-                        ydl_opts = {'format': f_info['id']+'+bestaudio/best' if f_info['type']=='v' else 'bestaudio/best', 'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s', 'nocheckcertificate': True}
-                        if f_info['type']=='a': ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
+                        ydl_opts = {
+                            'format': f_info['id']+'+bestaudio/best' if f_info['type']=='v' else 'bestaudio/best',
+                            'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s',
+                            'nocheckcertificate': True,
+                            'http_headers': CUSTOM_HEADERS
+                        }
+                        if f_info['type']=='a': 
+                            ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
+                        
                         with YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(url, download=True)
                             path = ydl.prepare_filename(info)
@@ -195,21 +216,21 @@ elif st.session_state.auth_step == 'app':
             idx = len(msgs) - 1 - i
             st.markdown(f"<div style='background:#f0f2f6;padding:15px;border-radius:10px;border-left:5px solid red;'><b>{m['text']}</b><br><small>{m['date']}</small></div>", unsafe_allow_html=True)
             
-            c1, c2, c3 = st.columns([1,1,2]) # Исправлено: добавлены пропорции
+            c1, c2, c3 = st.columns(3)
             uid = st.session_state.user_info.get('email', 'admin')
-            if c1.button(f"👍 {m['likes']}", key=f"l{idx}"):
+            if c1.button(f"👍 {m.get('likes', 0)}", key=f"l{idx}"):
                 if uid not in m.get('voted', []):
-                    msgs[idx]['likes'] += 1; msgs[idx].setdefault('voted', []).append(uid); save_data(MSG_FILE, msgs); st.rerun()
-            if c2.button(f"👎 {m['dislikes']}", key=f"d{idx}"):
+                    m['likes'] = m.get('likes', 0) + 1; m.setdefault('voted', []).append(uid); save_data(MSG_FILE, msgs); st.rerun()
+            if c2.button(f"👎 {m.get('dislikes', 0)}", key=f"d{idx}"):
                 if uid not in m.get('voted', []):
-                    msgs[idx]['dislikes'] += 1; msgs[idx].setdefault('voted', []).append(uid); save_data(MSG_FILE, msgs); st.rerun()
+                    m['dislikes'] = m.get('dislikes', 0) + 1; m.setdefault('voted', []).append(uid); save_data(MSG_FILE, msgs); st.rerun()
             
-            with c3.expander(f"💬 Ответы ({len(m.get('comments', []))})"):
+            with c3.expander(f"💬 ({len(m.get('comments', []))})"):
                 for comm in m.get('comments', []):
                     st.markdown(f"**{comm['user']}**: {comm['text']} <small style='color:gray'>{comm['time']}</small>", unsafe_allow_html=True)
-                nc = st.text_input("Ваш ответ...", key=f"in{idx}")
+                nc = st.text_input("Ответ...", key=f"in{idx}")
                 if st.button("Ок", key=f"btn_c{idx}"):
                     if nc:
-                        msgs[idx].setdefault("comments", []).append({"user": st.session_state.user_info['name'], "text": nc, "time": datetime.now().strftime("%H:%M")})
+                        m.setdefault("comments", []).append({"user": st.session_state.user_info['name'], "text": nc, "time": datetime.now().strftime("%H:%M")})
                         save_data(MSG_FILE, msgs); st.rerun()
             st.divider()
