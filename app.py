@@ -153,25 +153,42 @@ elif st.session_state.auth_step == 'app':
             st.session_state.clear()
             st.rerun()
         
+        # --- ОБНОВЛЕННАЯ АДМИНКА ---
         if is_admin:
             st.divider()
-            st.subheader("🛠 Админка")
-            users = load_data(DB_FILE); banned = load_data(BAN_FILE)
-            st.write(f"Юзеров: {len(users)}")
-            target = st.text_input("Email для бана:").lower().strip()
-            if st.button("БАН/РАЗБАН"):
-                if target in banned: banned.remove(target)
-                else: banned.append(target)
-                save_data(BAN_FILE, banned); st.rerun()
+            st.subheader("🛠 Управление пользователями")
+            users = load_data(DB_FILE)
+            banned = load_data(BAN_FILE)
+            
+            if not users:
+                st.info("База пуста")
+            else:
+                for email, data in users.items():
+                    name = data.get('name', 'Без имени')
+                    status = "🛑" if email in banned else "✅"
+                    col_u, col_b = st.columns([3, 2])
+                    col_u.markdown(f"**{name}**\n<small>{email}</small>", unsafe_allow_html=True)
+                    
+                    if email in banned:
+                        if col_b.button("Разбан", key=f"unban_{email}"):
+                            banned.remove(email)
+                            save_data(BAN_FILE, banned)
+                            st.rerun()
+                    else:
+                        if col_b.button("БАН", key=f"ban_{email}", type="secondary"):
+                            banned.append(email)
+                            save_data(BAN_FILE, banned)
+                            st.rerun()
+                    st.divider()
+
             if st.button("🗑 Очистить кэш видео"):
                 for f in os.listdir(DOWNLOAD_DIR):
                     if f.endswith((".mp4",".mp3",".part")): os.remove(os.path.join(DOWNLOAD_DIR, f))
                 st.success("Очищено")
 
-    # Вкладки приложения
+    # Вкладки
     tab_dl, tab_msg = st.tabs(["📥 Загрузка", "💬 Сообщения"])
 
-    # --- ВКЛАДКА ЗАГРУЗКИ ---
     with tab_dl:
         st.title("📲 Video Downloader")
         url = st.text_input("Вставьте ссылку:")
@@ -192,10 +209,15 @@ elif st.session_state.auth_step == 'app':
                     except Exception as e: st.error(f"Ошибка: {e}")
 
         if st.session_state.formats:
-            choice = st.selectbox("Качество:", list(st.session_state.formats.keys()))
+            choice = st.selectbox("Выберите качество:", list(st.session_state.formats.keys()))
             if st.button("🚀 СКАЧАТЬ", type="primary"):
                 f_info = st.session_state.formats[choice]
-                ydl_opts = {'format': f_info['id']+'+bestaudio/best' if f_info['type']=='v' else 'bestaudio/best', 'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s'}
+                ydl_opts = {
+                    'format': f_info['id']+'+bestaudio/best' if f_info['type']=='v' else 'bestaudio/best',
+                    'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s',
+                    'nocheckcertificate': True,
+                    'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'}
+                }
                 if f_info['type']=='a': ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
                 try:
                     with YoutubeDL(ydl_opts) as ydl:
@@ -203,58 +225,31 @@ elif st.session_state.auth_step == 'app':
                         path = ydl.prepare_filename(info)
                         if f_info['type']=='a': path = os.path.splitext(path)[0] + ".mp3"
                         with open(path, "rb") as f:
-                            st.download_button("💾 Сохранить", f, file_name=os.path.basename(path))
+                            st.download_button("💾 Сохранить файл", f, file_name=os.path.basename(path))
                         os.remove(path)
                 except Exception as e: st.error(f"Ошибка: {e}")
             if st.button("🔄 Сброс"): st.session_state.formats = None; st.rerun()
 
-    # --- ВКЛАДКА СООБЩЕНИЙ ---
     with tab_msg:
-        st.header("💬 Объявления от Организатора")
+        st.header("💬 Сообщения")
         msgs = load_data(MESSAGES_FILE)
-
         if is_admin:
-            with st.expander("📝 Написать новое сообщение"):
-                new_msg = st.text_area("Текст сообщения:")
+            with st.expander("📝 Написать"):
+                new_msg = st.text_area("Сообщение:")
                 if st.button("Отправить"):
                     if new_msg:
-                        msgs.append({
-                            "id": len(msgs),
-                            "text": new_msg,
-                            "date": datetime.now().strftime("%d.%m %H:%M"),
-                            "likes": 0,
-                            "dislikes": 0,
-                            "users_voted": [] # Чтобы нельзя было голосовать много раз
-                        })
+                        msgs.append({"id": len(msgs), "text": new_msg, "date": datetime.now().strftime("%d.%m %H:%M"), "likes": 0, "dislikes": 0, "users_voted": []})
                         save_data(MESSAGES_FILE, msgs); st.rerun()
 
-        if not msgs:
-            st.info("Сообщений пока нет.")
-        else:
-            for i, m in enumerate(reversed(msgs)):
-                with st.container():
-                    st.markdown(f"""
-                    <div style="background-color: #f0f2f6; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #ff4b4b;">
-                        <small style="color: #666;">{m['date']}</small><br>
-                        <p style="margin: 5px 0; font-size: 16px;">{m['text']}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Кнопки лайков (используем реальный индекс из исходного списка)
-                    idx = len(msgs) - 1 - i
-                    col1, col2, _ = st.columns([1, 1, 4])
-                    
-                    # Проверка голосовал ли уже текущий пользователь
-                    u_id = st.session_state.user_info.get('email', 'admin')
-                    if col1.button(f"👍 {m['likes']}", key=f"l_{idx}"):
-                        if u_id not in msgs[idx]['users_voted']:
-                            msgs[idx]['likes'] += 1
-                            msgs[idx]['users_voted'].append(u_id)
-                            save_data(MESSAGES_FILE, msgs); st.rerun()
-                    
-                    if col2.button(f"👎 {m['dislikes']}", key=f"d_{idx}"):
-                        if u_id not in msgs[idx]['users_voted']:
-                            msgs[idx]['dislikes'] += 1
-                            msgs[idx]['users_voted'].append(u_id)
-                            save_data(MESSAGES_FILE, msgs); st.rerun()
-                    st.divider()
+        for i, m in enumerate(reversed(msgs)):
+            idx = len(msgs) - 1 - i
+            st.markdown(f"<div style='background: #f0f2f6; padding: 10px; border-radius: 10px; border-left: 5px solid red;'><small>{m['date']}</small><br>{m['text']}</div>", unsafe_allow_html=True)
+            c1, c2, _ = st.columns([1,1,4])
+            u_id = st.session_state.user_info.get('email', 'admin')
+            if c1.button(f"👍 {m['likes']}", key=f"l_{idx}"):
+                if u_id not in msgs[idx]['users_voted']:
+                    msgs[idx]['likes'] += 1; msgs[idx]['users_voted'].append(u_id); save_data(MESSAGES_FILE, msgs); st.rerun()
+            if c2.button(f"👎 {m['dislikes']}", key=f"d_{idx}"):
+                if u_id not in msgs[idx]['users_voted']:
+                    msgs[idx]['dislikes'] += 1; msgs[idx]['users_voted'].append(u_id); save_data(MESSAGES_FILE, msgs); st.rerun()
+            st.divider()
