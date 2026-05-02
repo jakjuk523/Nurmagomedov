@@ -24,12 +24,13 @@ for f in [DB_FILE, BAN_FILE, MSG_FILE]:
         with open(f, "w", encoding="utf-8") as file:
             json.dump([] if f != DB_FILE else {}, file)
 
-# --- 2. ФУНКЦИИ ---
+# --- 2. ФУНКЦИИ ДАННЫХ ---
 def load_data(file):
     try:
         with open(file, "r", encoding="utf-8") as f:
             c = f.read().strip()
-            return json.loads(c) if c else ([] if file != DB_FILE else {})
+            if not c: return [] if file != DB_FILE else {}
+            return json.loads(c)
     except: return [] if file != DB_FILE else {}
 
 def save_data(file, data):
@@ -38,7 +39,7 @@ def save_data(file, data):
 
 def send_otp(email):
     otp = str(random.randint(100000, 999999))
-    msg = MIMEText(f"Код: {otp}")
+    msg = MIMEText(f"Код подтверждения: {otp}")
     msg['Subject'], msg['From'], msg['To'] = 'Код подтверждения', SENDER_EMAIL, email
     for target in [SMTP_SERVER, SMTP_IP]:
         try:
@@ -51,7 +52,7 @@ def send_otp(email):
         except: continue
     return None
 
-# --- 3. СЕССИЯ ---
+# --- 3. СОСТОЯНИЕ СЕССИИ ---
 if 'auth_step' not in st.session_state: st.session_state.auth_step = 'main_gate'
 if 'user_info' not in st.session_state: st.session_state.user_info = None
 if 'formats' not in st.session_state: st.session_state.formats = None
@@ -68,10 +69,10 @@ if st.session_state.auth_step == 'main_gate':
             c = st.text_input("Код доступа:", type="password")
             if st.form_submit_button("Войти"):
                 if c == SECRET_CODE: st.session_state.auth_step = 'login_or_reg'; st.rerun()
-                else: st.error("Неверно")
+                else: st.error("Неверный код")
     with t2:
         with st.form("admin_gate"):
-            ap = st.text_input("Пароль:", type="password")
+            ap = st.text_input("Пароль организатора:", type="password")
             if st.form_submit_button("Админ-вход"):
                 if ap == ADMIN_PASSWORD:
                     st.session_state.user_info = {"name": "Админ", "role": "admin"}
@@ -105,27 +106,25 @@ elif st.session_state.auth_step in ['verify', 'reset']:
     with st.form("otp_finish"):
         c, n, p1, p2 = st.text_input("Код:"), st.text_input("Имя:") if is_reg else "", st.text_input("Пароль:", type="password"), st.text_input("Повторите:", type="password")
         if st.form_submit_button("Завершить"):
-            if c == st.session_state.get('otp') and p1 == p2:
+            if c == st.session_state.get('otp') and p1 == p2 and len(p1) > 3:
                 users = load_data(DB_FILE)
-                users[st.session_state.temp_email] = {"name": n if is_reg else users[st.session_state.temp_email]['name'], "pass": p1}
-                save_data(DB_FILE, users); st.session_state.auth_step = 'login_or_reg'; st.rerun()
+                name_val = n if is_reg else users.get(st.session_state.temp_email, {}).get('name', 'User')
+                users[st.session_state.temp_email] = {"name": name_val, "pass": p1}
+                save_data(DB_FILE, users); st.success("Готово!"); st.session_state.auth_step = 'login_or_reg'; st.rerun()
+            else: st.error("Ошибка в данных")
 
 # --- 5. ПРИЛОЖЕНИЕ ---
 elif st.session_state.auth_step == 'app':
     is_admin = st.session_state.user_info.get('role') == 'admin'
     
-    # Продвинутые настройки обхода
     ydl_base_opts = {
         'quiet': True,
         'nocheckcertificate': True,
         'no_warnings': True,
-        'ignoreerrors': True,
-        'youtube_include_dash_manifest': False, # Отключаем DASH для обхода 403
+        'youtube_include_dash_manifest': False,
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Sec-Fetch-Mode': 'navigate',
         }
     }
     
@@ -141,7 +140,10 @@ elif st.session_state.auth_step == 'app':
             st.divider()
             u_db, b_db = load_data(DB_FILE), load_data(BAN_FILE)
             for email, data in u_db.items():
-                if st.button(f"🚫 {email}", key=email):
+                name = data.get('name', 'User') if isinstance(data, dict) else "Old"
+                c1, c2 = st.columns(2)
+                c1.write(f"**{name}**\n{email}")
+                if c2.button("🚫" if email not in b_db else "✅", key=email):
                     if email in b_db: b_db.remove(email)
                     else: b_db.append(email)
                     save_data(BAN_FILE, b_db); st.rerun()
@@ -156,57 +158,46 @@ elif st.session_state.auth_step == 'app':
 
         if url and not st.session_state.formats:
             if st.button("🔍 Получить форматы", use_container_width=True):
-                with st.spinner("Очищаем кэш и обходим фильтры..."):
+                with st.spinner("Анализирую..."):
                     try:
                         with YoutubeDL(ydl_base_opts) as ydl:
                             info = ydl.extract_info(url, download=False)
-                            formats = info.get('formats', [])
                             opts = {}
-                            for f in formats:
-                                height = f.get('height')
-                                # Фильтруем только реальные видео-потоки (от 144p и выше)
-                                if height and height >= 144 and f.get('vcodec') != 'none':
-                                    label = f"{height}p ({f.get('ext', 'mp4')})"
-                                    # Берем лучший по качеству формат для каждого разрешения
+                            for f in info.get('formats', []):
+                                h = f.get('height')
+                                if h and f.get('vcodec') != 'none':
+                                    label = f"{h}p ({f.get('ext', 'mp4')})"
                                     if label not in opts or f.get('tbr', 0) > opts[label]['tbr']:
                                         opts[label] = {'id': f['format_id'], 'tbr': f.get('tbr', 0), 'type': 'v'}
                                 elif f.get('acodec') != 'none' and f.get('vcodec') == 'none':
                                     opts["🎵 MP3 Аудио"] = {'id': f['format_id'], 'type': 'a'}
-                            
-                            if not opts:
-                                st.warning("YouTube вернул пустые данные. Попробуйте еще раз или используйте другую ссылку.")
-                            else:
-                                st.session_state.formats = opts
-                                st.rerun()
-                    except Exception as e: 
-                        st.error(f"YouTube заблокировал соединение. Попробуйте сменить IP (Reboot app). Ошибка: {e}")
+                            st.session_state.formats = opts; st.rerun()
+                    except Exception as e: st.error(f"Ошибка: {e}")
 
         if st.session_state.formats:
             choice = st.selectbox("Выберите качество:", list(st.session_state.formats.keys()))
             if st.button("🚀 СКАЧАТЬ ВИДЕО", type="primary", use_container_width=True):
                 try:
                     f_info = st.session_state.formats[choice]
-                    with st.spinner("Загрузка и обработка..."):
+                    with st.spinner("Загрузка..."):
                         ydl_opts = ydl_base_opts.copy()
-                        # Принудительно выбираем MP4 для стабильности
-                        if f_info['type'] == 'v':
-                            ydl_opts['format'] = f"{f_info['id']}+bestaudio/best"
-                        else:
-                            ydl_opts['format'] = 'bestaudio/best'
-                            ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
-                        
+                        ydl_opts['format'] = f"{f_info['id']}+bestaudio/best" if f_info['type'] == 'v' else 'bestaudio/best'
                         ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/%(title)s.%(ext)s'
+                        if f_info['type'] == 'a':
+                            ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
                         
                         with YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(url, download=True)
                             path = ydl.prepare_filename(info)
-                            if f_info['type'] == 'a': path = os.path.splitext(path) + ".mp3"
+                            # ИСПРАВЛЕННАЯ СТРОКА ТУТ:
+                            if f_info['type'] == 'a': 
+                                path = os.path.splitext(path)[0] + ".mp3"
                             
                             with open(path, "rb") as f:
-                                st.success("✅ Файл готов к сохранению!")
+                                st.success("✅ Готово!")
                                 st.download_button("💾 СОХРАНИТЬ НА УСТРОЙСТВО", f, file_name=os.path.basename(path), use_container_width=True)
                             os.remove(path)
-                except Exception as e: st.error(f"Ошибка загрузки: {e}")
+                except Exception as e: st.error(f"Ошибка: {e}")
             if st.button("🔄 Сбросить ссылку"): st.session_state.formats = None; st.rerun()
 
     with t_chat:
