@@ -19,7 +19,7 @@ HISTORY_FILE = "download_history.json"
 SECRET_CODE = "27032012"
 ADMIN_PASSWORD = "2dsfjqHFugfHUgh219-Hfhwgj@"
 
-# Инициализация файлов
+# Инициализация файлов базы данных
 for f in [DB_FILE, BAN_FILE, HISTORY_FILE]:
     if not os.path.exists(f):
         with open(f, "w", encoding="utf-8") as file:
@@ -28,11 +28,15 @@ for f in [DB_FILE, BAN_FILE, HISTORY_FILE]:
 # --- 2. ФУНКЦИИ ДАННЫХ ---
 def load_data(file):
     try:
-        with open(file, "r", encoding="utf-8") as f: return json.load(f)
-    except: return [] if "history" in file else {}
+        with open(file, "r", encoding="utf-8") as f: 
+            data = json.load(f)
+            return data
+    except: 
+        return [] if "history" in file or "banned" in file else {}
 
 def save_data(file, data):
-    with open(file, "w", encoding="utf-8") as f: json.dump(data, f, indent=4, ensure_ascii=False)
+    with open(file, "w", encoding="utf-8") as f: 
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
 def send_otp(recipient_email):
     otp = str(random.randint(100000, 999999))
@@ -54,6 +58,8 @@ def send_otp(recipient_email):
 # --- 3. ИНИЦИАЛИЗАЦИЯ СЕССИИ ---
 if 'auth_step' not in st.session_state: st.session_state.auth_step = 'main_gate'
 if 'user_info' not in st.session_state: st.session_state.user_info = None
+if 'url_buffer' not in st.session_state: st.session_state.url_buffer = ""
+if 'formats' not in st.session_state: st.session_state.formats = None
 
 st.set_page_config(page_title="Video Downloader", page_icon="📲")
 
@@ -133,7 +139,7 @@ elif st.session_state.auth_step == 'verify_otp':
                 st.rerun()
 
 elif st.session_state.auth_step == 'reset_pass_verify':
-    st.title("🔑 Восстановление доступа")
+    st.title("🔑 Установка пароля")
     with st.form("reset_otp_form"):
         input_code = st.text_input("Код подтверждения:")
         new_pass = st.text_input("Новый пароль:", type="password")
@@ -142,11 +148,12 @@ elif st.session_state.auth_step == 'reset_pass_verify':
             if input_code == st.session_state.secret_storage:
                 if new_pass == confirm_pass:
                     users = load_data(DB_FILE)
-                    users[st.session_state.temp_email]['pass'] = new_pass
-                    save_data(DB_FILE, users)
-                    st.success("Пароль изменен!")
-                    st.session_state.auth_step = 'login_or_reg'
-                    st.rerun()
+                    if st.session_state.temp_email in users:
+                        users[st.session_state.temp_email]['pass'] = new_pass
+                        save_data(DB_FILE, users)
+                        st.success("Пароль успешно изменен!")
+                        st.session_state.auth_step = 'login_or_reg'
+                        st.rerun()
                 else: st.error("Пароли не совпадают")
             else: st.error("Неверный код")
 
@@ -155,7 +162,6 @@ elif st.session_state.auth_step == 'app':
     with st.sidebar:
         st.write(f"👤 **{st.session_state.user_info['name']}**")
         
-        # Кнопка смены пароля для обычного пользователя
         if st.session_state.user_info.get('role') != 'admin':
             if st.button("⚙️ Сменить пароль"):
                 st.session_state.temp_email = st.session_state.user_info['email']
@@ -174,13 +180,18 @@ elif st.session_state.auth_step == 'app':
             st.subheader("🛠 Панель Организатора")
             users = load_data(DB_FILE)
             banned = load_data(BAN_FILE)
-            st.write(f"Юзеров: {len(users)}")
-            if st.checkbox("Список пользователей"):
-                for u_email, u_data in users.items():
-                    status = "🛑" if u_email in banned else "✅"
-                    st.text(f"{status} {u_data['name']} ({u_email})")
+            st.write(f"Юзеров в базе: {len(users)}")
             
-            target = st.text_input("Email юзера:").lower().strip()
+            if st.checkbox("Показать пользователей"):
+                for u_email, u_data in users.items():
+                    if isinstance(u_data, dict):
+                        u_name = u_data.get('name', 'Без имени')
+                        status = "🛑" if u_email in banned else "✅"
+                        st.text(f"{status} {u_name} ({u_email})")
+                    else:
+                        st.text(f"❓ {u_email} (устар. формат)")
+            
+            target = st.text_input("Email для бана/разбана:").lower().strip()
             c1, c2 = st.columns(2)
             if c1.button("БАН"):
                 if target and target not in banned:
@@ -190,17 +201,61 @@ elif st.session_state.auth_step == 'app':
                 if target in banned:
                     banned.remove(target); save_data(BAN_FILE, banned)
                     st.rerun()
+            
+            if st.button("🗑 Очистить базу юзеров"):
+                save_data(DB_FILE, {})
+                st.success("База полностью очищена")
+                st.rerun()
 
     st.title("📲 Video Downloader")
-    url = st.text_input("Вставьте ссылку:")
-    quality = st.selectbox("Качество:", ["1080", "720", "Audio MP3"])
+    url = st.text_input("Вставьте ссылку:", value=st.session_state.url_buffer)
+    
+    # Сброс форматов при изменении ссылки
+    if url != st.session_state.url_buffer:
+        st.session_state.url_buffer = url
+        st.session_state.formats = None
+        st.rerun()
 
-    if st.button("🚀 ЗАПУСТИТЬ", type="primary", use_container_width=True):
-        if url:
-            status_text = st.empty()
-            ydl_format = 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
-            if quality == "720": ydl_format = 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
-            if quality == "Audio MP3": ydl_format = 'bestaudio/best'
+    # ЭТАП 1: АНАЛИЗ ФОРМАТОВ
+    if url and not st.session_state.formats:
+        if st.button("🔍 Получить доступные форматы", use_container_width=True):
+            with st.spinner("Анализирую качество..."):
+                ydl_opts = {
+                    'noplaylist': True,
+                    'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
+                }
+                try:
+                    with YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        formats = info.get('formats', [])
+                        options = {}
+                        for f in formats:
+                            res = f.get('height')
+                            ext = f.get('ext')
+                            if res and f.get('vcodec') != 'none':
+                                label = f"{res}p ({ext})"
+                                if label not in options or f.get('tbr', 0) > options[label]['tbr']:
+                                    options[label] = {'format_id': f['format_id'], 'tbr': f.get('tbr', 0), 'type': 'video', 'res': res}
+                            elif f.get('acodec') != 'none' and f.get('vcodec') == 'none':
+                                label = "Только Аудио (MP3)"
+                                options[label] = {'format_id': f['format_id'], 'type': 'audio'}
+                        st.session_state.formats = options
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Ошибка анализа: {e}")
+
+    # ЭТАП 2: ВЫБОР И СКАЧИВАНИЕ
+    if st.session_state.formats:
+        selected_label = st.selectbox("Выберите качество:", list(st.session_state.formats.keys()))
+        selected_info = st.session_state.formats[selected_label]
+
+        if st.button("🚀 ЗАПУСТИТЬ СКАЧИВАНИЕ", type="primary", use_container_width=True):
+            status_placeholder = st.empty()
+            
+            if selected_info['type'] == 'audio':
+                ydl_format = 'bestaudio/best'
+            else:
+                ydl_format = f"{selected_info['format_id']}+bestaudio/best"
 
             ydl_opts = {
                 'format': ydl_format,
@@ -209,19 +264,31 @@ elif st.session_state.auth_step == 'app':
                 'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
             }
 
-            if quality == "Audio MP3":
+            if selected_info['type'] == 'audio':
                 ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}]
 
             try:
                 with YoutubeDL(ydl_opts) as ydl:
-                    status_text.text("Загрузка...")
+                    status_placeholder.text("Скачивание на сервер...")
                     info = ydl.extract_info(url, download=True)
                     path = ydl.prepare_filename(info)
-                    if quality == "Audio MP3": path = os.path.splitext(path)[0] + ".mp3"
+                    if selected_info['type'] == 'audio':
+                        path = os.path.splitext(path)[0] + ".mp3"
 
                     with open(path, "rb") as f:
                         st.success("✅ Готово!")
-                        st.download_button(label="💾 СКАЧАТЬ", data=f, file_name=os.path.basename(path))
+                        st.download_button(
+                            label="💾 СОХРАНИТЬ ФАЙЛ НА УСТРОЙСТВО",
+                            data=f,
+                            file_name=os.path.basename(path),
+                            mime="video/mp4" if selected_info['type'] == 'video' else "audio/mpeg"
+                        )
                     os.remove(path)
             except Exception as e:
-                st.error(f"Ошибка: {e}")
+                st.error(f"Ошибка загрузки: {e}")
+        
+        if st.button("🔄 Сбросить и другую ссылку"):
+            st.session_state.formats = None
+            st.session_state.url_buffer = ""
+            st.rerun()
+
