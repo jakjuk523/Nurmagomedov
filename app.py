@@ -38,8 +38,8 @@ def save_data(file, data):
 
 def send_otp(email):
     otp = str(random.randint(100000, 999999))
-    msg = MIMEText(f"Ваш код: {otp}")
-    msg['Subject'], msg['From'], msg['To'] = 'Код доступа', SENDER_EMAIL, email
+    msg = MIMEText(f"Код: {otp}")
+    msg['Subject'], msg['From'], msg['To'] = 'Код подтверждения', SENDER_EMAIL, email
     for target in [SMTP_SERVER, SMTP_IP]:
         try:
             server = smtplib.SMTP(target, SMTP_PORT, timeout=10)
@@ -59,13 +59,13 @@ if 'url_buffer' not in st.session_state: st.session_state.url_buffer = ""
 
 st.set_page_config(page_title="Video Downloader", page_icon="📲")
 
-# --- 4. АВТОРИЗАЦИЯ --- (Код авторизации остается прежним, я его сократил для краткости)
+# --- 4. АВТОРИЗАЦИЯ ---
 if st.session_state.auth_step == 'main_gate':
     st.title("🔒 Вход")
     t1, t2 = st.tabs(["🔑 Пользователь", "🛠 Организатор"])
     with t1:
         with st.form("gate"):
-            c = st.text_input("Код:", type="password")
+            c = st.text_input("Код доступа:", type="password")
             if st.form_submit_button("Войти"):
                 if c == SECRET_CODE: st.session_state.auth_step = 'login_or_reg'; st.rerun()
                 else: st.error("Неверно")
@@ -74,7 +74,8 @@ if st.session_state.auth_step == 'main_gate':
             ap = st.text_input("Пароль:", type="password")
             if st.form_submit_button("Админ-вход"):
                 if ap == ADMIN_PASSWORD:
-                    st.session_state.user_info = {"name": "Админ", "role": "admin"}; st.session_state.auth_step = 'app'; st.rerun()
+                    st.session_state.user_info = {"name": "Админ", "role": "admin"}
+                    st.session_state.auth_step = 'app'; st.rerun()
 
 elif st.session_state.auth_step == 'login_or_reg':
     st.title("👤 Аккаунт")
@@ -85,21 +86,25 @@ elif st.session_state.auth_step == 'login_or_reg':
         pw = st.text_input("Пароль:", type="password") if choice == "Вход" else ""
         if st.form_submit_button("Далее"):
             if not em: st.error("Введите Email")
-            elif em in banned: st.error("Бан")
+            elif em in banned: st.error("Доступ закрыт")
             elif choice == "Вход":
                 if em in users and isinstance(users[em], dict) and users[em].get('pass') == pw:
-                    st.session_state.user_info = {"name": users[em]['name'], "email": em, "role": "user"}; st.session_state.auth_step = 'app'; st.rerun()
-                else: st.error("Ошибка")
+                    st.session_state.user_info = {"name": users[em]['name'], "email": em, "role": "user"}
+                    st.session_state.auth_step = 'app'; st.rerun()
+                else: st.error("Ошибка входа")
             else:
                 otp = send_otp(em)
-                if otp: st.session_state.temp_email, st.session_state.otp, st.session_state.auth_step = em, otp, 'verify' if choice == "Регистрация" else 'reset'; st.rerun()
+                if otp:
+                    st.session_state.temp_email, st.session_state.otp = em, otp
+                    st.session_state.auth_step = 'verify' if choice == "Регистрация" else 'reset'
+                    st.rerun()
 
 elif st.session_state.auth_step in ['verify', 'reset']:
     st.title("📩 Подтверждение")
     is_reg = st.session_state.auth_step == 'verify'
     with st.form("otp_finish"):
         c, n, p1, p2 = st.text_input("Код:"), st.text_input("Имя:") if is_reg else "", st.text_input("Пароль:", type="password"), st.text_input("Повторите:", type="password")
-        if st.form_submit_button("Готово"):
+        if st.form_submit_button("Завершить"):
             if c == st.session_state.get('otp') and p1 == p2:
                 users = load_data(DB_FILE)
                 users[st.session_state.temp_email] = {"name": n if is_reg else users[st.session_state.temp_email]['name'], "pass": p1}
@@ -108,9 +113,26 @@ elif st.session_state.auth_step in ['verify', 'reset']:
 # --- 5. ПРИЛОЖЕНИЕ ---
 elif st.session_state.auth_step == 'app':
     is_admin = st.session_state.user_info.get('role') == 'admin'
+    
+    # МОЩНЫЕ НАСТРОЙКИ ОБХОДА
+    ydl_base_opts = {
+        'quiet': True,
+        'nocheckcertificate': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}, # Имитация мобилок
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
+    }
+    
     with st.sidebar:
         st.write(f"👤 **{st.session_state.user_info['name']}**")
+        if os.path.exists(COOKIE_FILE):
+            st.success("✅ Cookies.txt подключен")
+            ydl_base_opts['cookiefile'] = COOKIE_FILE
+        
         if st.button("🚪 Выйти"): st.session_state.clear(); st.rerun()
+        
         if is_admin:
             st.divider()
             u_db, b_db = load_data(DB_FILE), load_data(BAN_FILE)
@@ -128,29 +150,9 @@ elif st.session_state.auth_step == 'app':
         if url != st.session_state.url_buffer:
             st.session_state.url_buffer, st.session_state.formats = url, None
 
-        # НАСТРОЙКИ ОБХОДА БЛОКИРОВКИ
-        ydl_base_opts = {
-            'quiet': True,
-            'nocheckcertificate': True,
-            'no_warnings': True,
-            'extract_flat': False,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-us,en;q=0.5',
-            }
-        }
-        
-        # Проверка наличия cookies.txt
-        if os.path.exists(COOKIE_FILE):
-            ydl_base_opts['cookiefile'] = COOKIE_FILE
-            st.sidebar.success("✅ Cookies.txt подключен")
-        else:
-            st.sidebar.warning("⚠️ Cookies.txt не найден")
-
         if url and not st.session_state.formats:
-            if st.button("🔍 Анализ"):
-                with st.spinner("Обхожу блокировку YouTube..."):
+            if st.button("🔍 Получить форматы"):
+                with st.spinner("Анализирую (через мобильный шлюз)..."):
                     try:
                         with YoutubeDL(ydl_base_opts) as ydl:
                             info = ydl.extract_info(url, download=False)
@@ -161,7 +163,7 @@ elif st.session_state.auth_step == 'app':
                                 elif f.get('acodec')!='none' and f.get('vcodec')=='none':
                                     opts["🎵 MP3 Аудио"] = {'id': f['format_id'], 'type': 'a'}
                             st.session_state.formats = opts; st.rerun()
-                    except Exception as e: st.error(f"YouTube заблокировал сервер. Ошибка: {e}")
+                    except Exception as e: st.error(f"Ошибка: {e}")
 
         if st.session_state.formats:
             choice = st.selectbox("Качество:", list(st.session_state.formats.keys()))
@@ -172,20 +174,21 @@ elif st.session_state.auth_step == 'app':
                         ydl_opts = ydl_base_opts.copy()
                         ydl_opts['format'] = f_info['id']+'+bestaudio/best' if f_info['type']=='v' else 'bestaudio/best'
                         ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/%(title)s.%(ext)s'
-                        if f_info['type']=='a': ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
+                        if f_info['type']=='a': 
+                            ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
                         
                         with YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(url, download=True)
                             path = ydl.prepare_filename(info)
                             if f_info['type']=='a': path = os.path.splitext(path)[0] + ".mp3"
                             with open(path, "rb") as f:
-                                st.download_button("💾 Сохранить", f, file_name=os.path.basename(path))
+                                st.download_button("💾 Сохранить файл", f, file_name=os.path.basename(path))
                             os.remove(path)
                 except Exception as e: st.error(f"Ошибка загрузки: {e}")
             if st.button("🔄 Сброс"): st.session_state.formats = None; st.rerun()
 
     with t_chat:
-        st.header("💬 Чат")
+        st.header("💬 Обсуждения")
         msgs = load_data(MSG_FILE)
         if is_admin:
             with st.expander("📝 Написать"):
@@ -208,3 +211,4 @@ elif st.session_state.auth_step == 'app':
                 if st.button("Ок", key=f"btn_c{idx}"):
                     if nc: m.setdefault("comments", []).append({"user": st.session_state.user_info['name'], "text": nc, "time": datetime.now().strftime("%H:%M")}); save_data(MSG_FILE, msgs); st.rerun()
             st.divider()
+
