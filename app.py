@@ -7,8 +7,8 @@ from email.mime.text import MIMEText
 from yt_dlp import YoutubeDL
 from datetime import datetime
 
-# --- 1. КОНФИГУРАЦИЯ (Приватная) ---
-st.set_page_config(page_title="Private DL & Chat", page_icon="🛡️", layout="wide")
+# --- 1. КОНФИГУРАЦИЯ ---
+st.set_page_config(page_title="Video Downloader & Chat", page_icon="📲", layout="wide")
 
 BASE_DIR = os.getcwd()
 DB_FILE = os.path.join(BASE_DIR, "users_db.json")
@@ -16,17 +16,18 @@ BAN_FILE = os.path.join(BASE_DIR, "banned_users.json")
 MSG_FILE = os.path.join(BASE_DIR, "messages.json")
 COOKIE_FILE = os.path.join(BASE_DIR, "cookies.txt")
 
-# Твои секретные данные
 SECRET_CODE = "27032012"
 ADMIN_PASSWORD = "2dsfjqHFugfHUgh219-Hfhwgj@"
 SENDER_EMAIL = "isa.murad.ibaanah@gmail.com"
 SENDER_PASSWORD = st.secrets.get('google_password', "")
 
-# Инициализация хранилища
-for f in [DB_FILE, BAN_FILE, MSG_FILE]:
-    if not os.path.exists(f):
-        with open(f, "w", encoding="utf-8") as file:
-            json.dump([] if "users" not in f else {}, file)
+# Инициализация файлов (Исправлено: BAN_FILE теперь всегда список)
+if not os.path.exists(DB_FILE):
+    with open(DB_FILE, "w", encoding="utf-8") as f: json.dump({}, f)
+if not os.path.exists(BAN_FILE):
+    with open(BAN_FILE, "w", encoding="utf-8") as f: json.dump([], f)
+if not os.path.exists(MSG_FILE):
+    with open(MSG_FILE, "w", encoding="utf-8") as f: json.dump([], f)
 
 if "youtube_cookies" in st.secrets:
     with open(COOKIE_FILE, "w", encoding="utf-8") as f:
@@ -37,7 +38,8 @@ def load_data(file):
     try:
         with open(file, "r", encoding="utf-8") as f:
             return json.load(f)
-    except: return [] if "users" not in file else {}
+    except: 
+        return [] if "users" not in file else {}
 
 def save_data(file, data):
     with open(file, "w", encoding="utf-8") as f:
@@ -45,8 +47,8 @@ def save_data(file, data):
 
 def send_otp(email):
     otp = str(random.randint(100000, 999999))
-    msg = MIMEText(f"Твой код доступа: {otp}")
-    msg['Subject'], msg['From'], msg['To'] = 'Авторизация в системе', SENDER_EMAIL, email
+    msg = MIMEText(f"Ваш код доступа: {otp}")
+    msg['Subject'], msg['From'], msg['To'] = 'Код подтверждения', SENDER_EMAIL, email
     try:
         server = smtplib.SMTP("://gmail.com", 587, timeout=10)
         server.starttls()
@@ -56,93 +58,95 @@ def send_otp(email):
         return otp
     except: return None
 
-# --- 3. ЛОГИКА ДОСТУПА ---
-if 'auth_step' not in st.session_state: st.session_state.auth_step = 'gate'
+# --- 3. СЕССИЯ ---
+if 'auth_step' not in st.session_state: st.session_state.auth_step = 'main_gate'
 if 'user_info' not in st.session_state: st.session_state.user_info = None
+if 'formats' not in st.session_state: st.session_state.formats = None
+if 'url_buffer' not in st.session_state: st.session_state.url_buffer = ""
 
-if st.session_state.auth_step == 'gate':
-    st.title("🛡️ Вход в закрытую систему")
-    col1, col2 = st.columns(2)
-    with col1:
-        code = st.text_input("Введите мастер-код:", type="password")
-        if st.button("Подтвердить код"):
-            if code == SECRET_CODE:
-                st.session_state.auth_step = 'auth'; st.rerun()
-            else: st.error("Доступ запрещен.")
-    with col2:
-        adm = st.text_input("Вход для владельца:", type="password")
-        if st.button("Вход владельца"):
-            if adm == ADMIN_PASSWORD:
-                st.session_state.user_info = {"name": "Владелец", "role": "admin", "email": "master@root"}
+# --- 4. АВТОРИЗАЦИЯ (Экран как был) ---
+if st.session_state.auth_step == 'main_gate':
+    st.title("🔒 Вход")
+    t1, t2 = st.tabs(["🔑 Пользователь", "🛠 Админ"])
+    with t1:
+        code = st.text_input("Код доступа:", type="password", key="gate_code")
+        if st.button("Войти"):
+            if code == SECRET_CODE: st.session_state.auth_step = 'login_or_reg'; st.rerun()
+            else: st.error("Неверно")
+    with t2:
+        ap = st.text_input("Пароль администратора:", type="password")
+        if st.button("Админ-вход"):
+            if ap == ADMIN_PASSWORD:
+                st.session_state.user_info = {"name": "Админ", "role": "admin", "email": "admin@system"}
                 st.session_state.auth_step = 'app'; st.rerun()
 
-elif st.session_state.auth_step == 'auth':
-    st.title("👤 Личный кабинет")
-    users = load_data(DB_FILE)
-    banned = load_data(BAN_FILE)
-    mode = st.radio("Действие", ["Вход", "Регистрация"], horizontal=True)
+elif st.session_state.auth_step == 'login_or_reg':
+    st.title("👤 Аккаунт")
+    users, banned = load_data(DB_FILE), load_data(BAN_FILE)
+    choice = st.radio("Действие:", ["Вход", "Регистрация"], horizontal=True)
     em = st.text_input("Email:").lower().strip()
-    
-    if mode == "Вход":
-        pw = st.text_input("Пароль:", type="password")
-        if st.button("Войти"):
-            if em in banned: st.error("Доступ заблокирован.")
-            elif em in users and users[em]['pass'] == pw:
+    pw = st.text_input("Пароль:", type="password") if choice == "Вход" else ""
+    if st.button("Далее"):
+        if not em: st.error("Введите Email")
+        elif em in banned: st.error("Бан")
+        elif choice == "Вход":
+            if em in users and users[em].get('pass') == pw:
                 st.session_state.user_info = {"name": users[em]['name'], "email": em, "role": "user"}
                 st.session_state.auth_step = 'app'; st.rerun()
-            else: st.error("Неверные данные.")
-    else:
-        if st.button("Получить код на почту"):
+            else: st.error("Ошибка входа")
+        else:
             otp = send_otp(em)
             if otp:
                 st.session_state.temp_email, st.session_state.otp = em, otp
                 st.session_state.auth_step = 'verify'; st.rerun()
-            else: st.error("Ошибка отправки. Проверь email.")
 
 elif st.session_state.auth_step == 'verify':
-    st.title("📩 Верификация")
-    c = st.text_input("Код из письма:")
-    n = st.text_input("Твое имя:")
-    p = st.text_input("Придумай пароль:", type="password")
-    if st.button("Создать аккаунт"):
-        if c == st.session_state.otp and len(p) >= 4:
-            u = load_data(DB_FILE)
-            u[st.session_state.temp_email] = {"name": n, "pass": p}
-            save_data(DB_FILE, u)
-            st.success("Готово! Теперь войди."); st.session_state.auth_step = 'auth'; st.rerun()
+    st.title("📩 Подтверждение")
+    c = st.text_input("Код:")
+    n = st.text_input("Имя:")
+    p1 = st.text_input("Пароль:", type="password")
+    if st.button("Завершить"):
+        if c == st.session_state.get('otp') and len(p1) >= 4:
+            users = load_data(DB_FILE)
+            users[st.session_state.temp_email] = {"name": n, "pass": p1}
+            save_data(DB_FILE, users); st.success("Готово!"); st.session_state.auth_step = 'login_or_reg'; st.rerun()
 
-# --- 4. ОСНОВНОЙ ФУНКЦИОНАЛ ---
+# --- 5. ПРИЛОЖЕНИЕ ---
 elif st.session_state.auth_step == 'app':
-    user = st.session_state.user_info
-    
+    is_admin = st.session_state.user_info.get('role') == 'admin'
+    current_user_email = st.session_state.user_info.get('email')
+
     with st.sidebar:
-        st.write(f"Привет, **{user['name']}**!")
-        if st.button("Выйти"): st.session_state.clear(); st.rerun()
-        
-        if user['role'] == 'admin':
+        st.header(f"👤 {st.session_state.user_info['name']}")
+        if st.button("🚪 Выйти"): st.session_state.clear(); st.rerun()
+        if is_admin:
             st.divider()
-            st.caption("Управление доступом")
-            all_u = load_data(DB_FILE)
-            b_list = load_data(BAN_FILE)
-            for mail in all_u:
-                status = "🚫" if mail in b_list else "✅"
-                if st.button(f"{status} {mail}"):
-                    if mail in b_list: b_list.remove(mail)
-                    else: b_list.append(mail)
-                    save_data(BAN_FILE, b_list); st.rerun()
+            st.subheader("Управление")
+            u_db = load_data(DB_FILE)
+            b_db = load_data(BAN_FILE)
+            for email in u_db:
+                # Исправлена ошибка бана: работаем со списком
+                status = "✅" if email not in b_db else "🚫"
+                if st.button(f"{status} {email}"):
+                    if email in b_db: b_db.remove(email)
+                    else: b_db.append(email)
+                    save_data(BAN_FILE, b_db); st.rerun()
 
-    tab_dl, tab_chat = st.tabs(["📥 Загрузка видео", "💬 Приватный чат"])
+    t_dl, t_chat = st.tabs(["📥 Загрузка", "💬 Общий чат"])
+    
+    with t_dl:
+        url = st.text_input("Ссылка:")
+        if url != st.session_state.url_buffer:
+            st.session_state.url_buffer, st.session_state.formats = url, None
 
-    with tab_dl:
-        url = st.text_input("Ссылка на видео:")
-        if url:
-            if st.button("🔍 Найти доступные качества"):
-                with st.spinner("Обходим блокировки..."):
+        if url and not st.session_state.formats:
+            if st.button("🔍 Найти форматы"):
+                with st.spinner("Анализ..."):
                     try:
                         ydl_opts = {
                             'quiet': True,
                             'http_headers': {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                                 'Referer': 'https://vk.com' if 'vk' in url else 'https://google.com'
                             }
                         }
@@ -150,65 +154,79 @@ elif st.session_state.auth_step == 'app':
                         
                         with YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(url, download=False)
-                            formats = info.get('formats', [info])
-                            res_opts = {}
-                            for f in formats:
-                                if f.get('height') and f.get('vcodec') != 'none':
-                                    res_opts[f"{f['height']}p ({f['ext']})"] = f['format_id']
+                            opts = {}
+                            # Добавляем Аудио формат (MP3) первым
+                            opts["🎵 Аудио (MP3)"] = {'id': 'bestaudio/best', 'type': 'a'}
                             
-                            st.session_state.current_formats = res_opts
-                            st.session_state.current_url = url
-                    except Exception as e: st.error(f"Ошибка (возможно, нужны свежие куки): {e}")
+                            for f in info.get('formats', []):
+                                h = f.get('height')
+                                if h and f.get('vcodec') != 'none':
+                                    label = f"{h}p ({f.get('ext')})"
+                                    if label not in opts:
+                                        opts[label] = {'id': f['format_id'], 'type': 'v'}
+                            
+                            st.session_state.formats = opts; st.rerun()
+                    except Exception as e: st.error(f"Ошибка: {e}")
 
-        if 'current_formats' in st.session_state and st.session_state.current_formats:
-            qual = st.selectbox("Выбери качество:", list(st.session_state.current_formats.keys()))
-            if st.button("🚀 Скачать"):
+        if st.session_state.formats:
+            choice = st.selectbox("Качество:", list(st.session_state.formats.keys()))
+            if st.button("🚀 СКАЧАТЬ"):
                 try:
-                    with st.spinner("Загружаем..."):
-                        fid = st.session_state.current_formats[qual]
+                    f_info = st.session_state.formats[choice]
+                    with st.spinner("Загрузка..."):
                         ydl_opts = {
-                            'format': f"{fid}+bestaudio/best",
-                            'outtmpl': '%(title)s.%(ext)s',
+                            'format': f"{f_info['id']}+bestaudio/best" if f_info['type'] == 'v' else 'bestaudio/best',
+                            'outtmpl': os.path.join(BASE_DIR, '%(title)s.%(ext)s'),
                             'cookiefile': COOKIE_FILE if os.path.exists(COOKIE_FILE) else None,
-                            'merge_output_format': 'mp4'
+                            'merge_output_format': 'mp4' if f_info['type'] == 'v' else None
                         }
+                        if f_info['type'] == 'a':
+                            ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
+                        
                         with YoutubeDL(ydl_opts) as ydl:
-                            info = ydl.extract_info(st.session_state.current_url, download=True)
-                            fname = ydl.prepare_filename(info).replace('.mkv', '.mp4').replace('.webm', '.mp4')
-                            
-                            with open(fname, "rb") as f:
-                                st.download_button("💾 Сохранить на устройство", f, file_name=fname)
-                            os.remove(fname)
-                except Exception as e: st.error(f"Ошибка при скачивании: {e}")
+                            info = ydl.extract_info(url, download=True)
+                            path = ydl.prepare_filename(info)
+                            if f_info['type'] == 'a': path = os.path.splitext(path)[0] + ".mp3"
 
-    with tab_chat:
-        msgs = load_data(MSG_FILE)
-        st.caption("Чат зашифрован (XSS Protection Active)")
+                        if os.path.exists(path):
+                            with open(path, "rb") as f:
+                                st.download_button("💾 СОХРАНИТЬ", f, file_name=os.path.basename(path))
+                            os.remove(path)
+                except Exception as e: st.error(f"Ошибка: {e}")
+
+    with t_chat:
+        st.subheader("💬 Общий чат")
+        messages = load_data(MSG_FILE)
         
-        container = st.container(height=400)
-        for m in msgs:
-            is_me = m['author_email'] == user['email']
-            # Защита от взлома через текст
-            clean_text = m['text'].replace("<", "&lt;").replace(">", "&gt;")
-            
-            container.markdown(f"""
-                <div style="text-align: {'right' if is_me else 'left'}; margin-bottom: 10px;">
-                    <div style="display: inline-block; background: {'#DCF8C6' if is_me else '#F0F2F5'}; 
-                                padding: 8px 12px; border-radius: 15px; color: black; text-align: left;">
-                        <small style="color: #666;">{m['author_name']}</small><br>{clean_text}
-                        <div style="font-size: 0.7em; color: #999; text-align: right;">{m['date']}</div>
+        chat_container = st.container(height=400)
+        with chat_container:
+            for m in messages:
+                is_me = m.get('author_email') == current_user_email
+                align = "right" if is_me else "left"
+                bg = "#DCF8C6" if is_me else "#F0F0F0"
+                # Защита от XSS
+                safe_text = m.get('text', '').replace("<", "&lt;").replace(">", "&gt;")
+                
+                st.markdown(f"""
+                <div style="display: flex; justify-content: {align}; margin-bottom: 10px;">
+                    <div style="background: {bg}; padding: 10px; border-radius: 15px; max-width: 70%; color: black;">
+                        <b style="font-size: 0.8rem; color: #555;">{m.get('author_name', 'User')}</b><br>
+                        {safe_text}<br>
+                        <small style="font-size: 0.6rem; color: gray;">{m.get('date')}</small>
                     </div>
                 </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
 
-        with st.form("chat_f", clear_on_submit=True):
-            txt = st.text_input("Ваше сообщение...")
-            if st.form_submit_button("Отправить") and txt:
-                msgs.append({
-                    "author_name": user['name'],
-                    "author_email": user['email'],
-                    "text": txt,
-                    "date": datetime.now().strftime("%H:%M")
-                })
-                save_data(MSG_FILE, msgs[-100:])
-                st.rerun()
+        with st.form("send_msg", clear_on_submit=True):
+            user_text = st.text_input("Введите сообщение...")
+            if st.form_submit_button("Отправить"):
+                if user_text:
+                    new_msg = {
+                        "author_name": st.session_state.user_info['name'],
+                        "author_email": current_user_email,
+                        "text": user_text,
+                        "date": datetime.now().strftime("%H:%M")
+                    }
+                    messages.append(new_msg)
+                    save_data(MSG_FILE, messages[-100:]) # Храним последние 100
+                    st.rerun()
